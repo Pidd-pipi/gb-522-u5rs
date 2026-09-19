@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ClipboardCheck, GitCompareArrows, Plus, Play, LockKeyhole } from 'lucide-vue-next'
+import { ClipboardCheck, GitCompareArrows, Plus, Play, LockKeyhole, TriangleAlert } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
 import ReviewDialog from '@/components/common/ReviewDialog.vue'
 import { useCaseStore } from '@/stores/cases'
@@ -13,6 +13,7 @@ import { CASE_STATUSES, caseStatusLabel, type LocalizationCase } from '@/types/c
 const cases = useCaseStore(); const routes = useRouteStore(); const traces = useTraceStore(); const auth = useAuth(); const status = ref(''); const createOpen = ref(false); const reviewOpen = ref(false); const current = ref<LocalizationCase | null>(null); const busy = ref(false)
 const form = reactive({ route_id: 0, baseline_trace_id: 0, current_trace_id: 0, distance_tolerance_m: 25, loss_increase_db: 0.5 })
 const routeTraces = computed(() => traces.items.filter((item) => item.route_id === form.route_id))
+const staleCases = computed(() => cases.items.filter((item) => item.requires_reanalysis))
 async function search() { await cases.fetch({ status: status.value || undefined, page_size: 100 }) }
 function chooseRoute() { const route = routes.items.find((item)=>item.id===form.route_id); form.baseline_trace_id = route?.baseline_trace_id ?? 0; form.current_trace_id = routeTraces.value.find((trace)=>trace.id !== form.baseline_trace_id)?.id ?? 0 }
 async function create() { busy.value=true; try { await cases.create(form); createOpen.value=false; ElMessage.success('定位案例已建立') } finally { busy.value=false } }
@@ -25,6 +26,9 @@ onMounted(async()=>{ await Promise.all([routes.fetch({page_size:100}),traces.fet
 
 <template>
   <PageHeader title="定位案例" eyebrow="LOCALIZATION CASES" description="基线差异仅作分析参考，由复核人员形成最终结论。"><el-button v-if="auth.canAnalyze()" type="primary" @click="createOpen=true"><Plus :size="16" />新建案例</el-button></PageHeader>
+  <el-alert v-if="staleCases.length" class="stale-banner" type="warning" :closable="false" show-icon>
+    <template #title>{{ staleCases.length }} 个案例引用的事件已被复核修订，原有分析结果失效，已退回草稿并记录原因，请重新执行分析。</template>
+  </el-alert>
   <section class="content-band">
     <div class="case-toolbar"><div class="state-track"><span v-for="(value,index) in CASE_STATUSES" :key="value"><i>{{ index+1 }}</i>{{ caseStatusLabel[value] }}</span></div><el-select v-model="status" clearable placeholder="全部状态" style="width:150px" @change="search"><el-option v-for="value in CASE_STATUSES" :key="value" :label="caseStatusLabel[value]" :value="value" /></el-select></div>
     <div class="data-surface">
@@ -32,10 +36,10 @@ onMounted(async()=>{ await Promise.all([routes.fetch({page_size:100}),traces.fet
         <el-table-column prop="id" label="案例" width="80"><template #default="scope"><strong>#{{ scope.row.id }}</strong></template></el-table-column>
         <el-table-column label="线路" width="125"><template #default="scope">{{ routes.items.find(r=>r.id===scope.row.route_id)?.route_code ?? `#${scope.row.route_id}` }}</template></el-table-column>
         <el-table-column label="对比轨迹" min-width="150"><template #default="scope"><span class="trace-pair">#{{ scope.row.baseline_trace_id }} <GitCompareArrows :size="14" /> #{{ scope.row.current_trace_id }}</span></template></el-table-column>
-        <el-table-column label="状态" width="115"><template #default="scope"><span class="status-pill" :class="scope.row.case_status">{{ caseStatusLabel[scope.row.case_status as LocalizationCase['case_status']] }}</span></template></el-table-column>
+        <el-table-column label="状态" width="140"><template #default="scope"><span class="status-pill" :class="scope.row.case_status">{{ caseStatusLabel[scope.row.case_status as LocalizationCase['case_status']] }}</span><el-tooltip v-if="scope.row.requires_reanalysis" :content="scope.row.analysis_error || '引用事件已被修订'" placement="top"><span class="reanalyze-tag"><TriangleAlert :size="13" />需重新分析</span></el-tooltip></template></el-table-column>
         <el-table-column label="估算位置" width="150"><template #default="scope"><template v-if="scope.row.estimated_distance_m != null"><strong>{{ scope.row.estimated_distance_m.toFixed(2) }} m</strong><small class="uncertainty">± {{ scope.row.uncertainty_m?.toFixed(2) }} m</small></template><span v-else class="muted">待分析</span></template></el-table-column>
-        <el-table-column prop="conclusion" label="复核结论" min-width="230"><template #default="scope"><span v-if="scope.row.conclusion" class="conclusion">{{ scope.row.conclusion }}</span><span v-else class="muted">尚未确认</span></template></el-table-column>
-        <el-table-column label="操作" width="190" fixed="right"><template #default="scope"><el-button v-if="scope.row.case_status==='draft' && auth.canAnalyze()" link type="primary" :loading="busy" @click="analyze(scope.row)"><Play :size="14" />分析</el-button><el-button v-if="scope.row.case_status==='pending_review' && auth.canReview()" link type="primary" @click="confirm(scope.row)"><ClipboardCheck :size="14" />确认</el-button><el-button v-if="scope.row.case_status==='confirmed' && auth.canReview()" link type="danger" @click="close(scope.row)"><LockKeyhole :size="14" />关闭</el-button><span v-if="scope.row.case_status==='closed'" class="muted">已归档</span></template></el-table-column>
+        <el-table-column prop="conclusion" label="复核结论" min-width="230"><template #default="scope"><span v-if="scope.row.requires_reanalysis && scope.row.analysis_error" class="invalidation-reason">{{ scope.row.analysis_error }}</span><span v-else-if="scope.row.conclusion" class="conclusion">{{ scope.row.conclusion }}</span><span v-else class="muted">尚未确认</span></template></el-table-column>
+        <el-table-column label="操作" width="190" fixed="right"><template #default="scope"><el-button v-if="scope.row.case_status==='draft' && auth.canAnalyze()" link type="primary" :loading="busy" @click="analyze(scope.row)"><Play :size="14" />{{ scope.row.requires_reanalysis ? '重新分析' : '分析' }}</el-button><el-button v-if="scope.row.case_status==='pending_review' && auth.canReview()" link type="primary" @click="confirm(scope.row)"><ClipboardCheck :size="14" />确认</el-button><el-button v-if="scope.row.case_status==='confirmed' && auth.canReview()" link type="danger" @click="close(scope.row)"><LockKeyhole :size="14" />关闭</el-button><span v-if="scope.row.case_status==='closed'" class="muted">已归档</span></template></el-table-column>
         <template #empty><div class="empty-state"><div><ClipboardCheck :size="34" /><strong>尚无定位案例</strong><span>选择同线路基线与当前轨迹建立对比。</span></div></div></template>
       </el-table>
     </div>
@@ -45,5 +49,5 @@ onMounted(async()=>{ await Promise.all([routes.fetch({page_size:100}),traces.fet
 </template>
 
 <style scoped>
-.case-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:14px}.state-track{display:flex;align-items:center;overflow:auto}.state-track span{display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:11px;font-weight:700;white-space:nowrap}.state-track span:not(:last-child)::after{content:'';width:24px;height:1px;margin:0 7px;background:var(--line-strong)}.state-track i{width:20px;height:20px;display:grid;place-items:center;border:1px solid var(--line-strong);border-radius:50%;font-style:normal}.trace-pair{display:inline-flex;align-items:center;gap:6px}.uncertainty{display:block;margin-top:2px;color:var(--text-muted)}.conclusion{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}.muted{color:var(--text-muted);font-size:12px}.case-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}@media(max-width:700px){.case-toolbar{align-items:stretch;flex-direction:column}.case-form-grid{grid-template-columns:1fr}}
+.case-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:14px}.stale-banner{margin-bottom:14px}.state-track{display:flex;align-items:center;overflow:auto}.state-track span{display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:11px;font-weight:700;white-space:nowrap}.state-track span:not(:last-child)::after{content:'';width:24px;height:1px;margin:0 7px;background:var(--line-strong)}.state-track i{width:20px;height:20px;display:grid;place-items:center;border:1px solid var(--line-strong);border-radius:50%;font-style:normal}.trace-pair{display:inline-flex;align-items:center;gap:6px}.uncertainty{display:block;margin-top:2px;color:var(--text-muted)}.reanalyze-tag{display:inline-flex;align-items:center;gap:3px;margin-top:5px;padding:1px 7px;border-radius:10px;background:var(--el-color-warning-light-9);color:var(--el-color-warning-dark-2);font-size:11px;font-weight:800;cursor:help}.invalidation-reason{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--el-color-warning-dark-2);font-size:12px}.conclusion{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}.muted{color:var(--text-muted);font-size:12px}.case-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}@media(max-width:700px){.case-toolbar{align-items:stretch;flex-direction:column}.case-form-grid{grid-template-columns:1fr}}
 </style>

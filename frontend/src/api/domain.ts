@@ -1,6 +1,6 @@
 import { api } from './client'
 import type { ApiEnvelope, AuditLog, FiberRoute, TraceCapture, TraceEnvelope, User } from '@/types/domain'
-import type { EventMarker, EventType } from '@/types/event'
+import type { EventMarker, EventType, EventRevisionSummary, ReviewEventResponse } from '@/types/event'
 import type { LocalizationCase } from '@/types/case'
 
 export const authApi = { login: (body: { username: string; password: string }) => api.post<ApiEnvelope<{ token: string; expires_at: string; user: User }>>('/auth/login', body) }
@@ -19,7 +19,8 @@ export const traceApi = {
 }
 export const eventApi = {
   list: (params?: object) => api.get<ApiEnvelope<EventMarker[]>>('/events', { params }),
-  review: (id: number, body: { event_type: EventType; distance_m?: number; review_note: string }) => api.patch<ApiEnvelope<EventMarker>>(`/events/${id}/review`, body),
+  review: (id: number, body: { event_type: EventType; distance_m?: number; review_note: string; version: number }) => api.patch<ApiEnvelope<ReviewEventResponse>>(`/events/${id}/review`, body),
+  revisions: (id: number) => api.get<ApiEnvelope<EventRevisionSummary[]>>(`/events/${id}/revisions`),
 }
 export const caseApi = {
   list: (params?: object) => api.get<ApiEnvelope<LocalizationCase[]>>('/cases', { params }),

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
+import { History } from 'lucide-vue-next'
 import { EVENT_TYPES, eventLabel, type EventMarker, type EventType } from '@/types/event'
 import type { LocalizationCase } from '@/types/case'
 
@@ -11,16 +12,27 @@ watch(() => [props.modelValue, props.event, props.caseItem], () => {
   if (props.caseItem) { form.conclusion = props.caseItem.conclusion ?? ''; form.estimated_distance_m = props.caseItem.estimated_distance_m ?? 0; form.uncertainty_m = props.caseItem.uncertainty_m ?? 10 }
 }, { immediate: true })
 function submit() {
-  if (props.mode === 'event') emit('submit', { event_type: form.event_type, distance_m: form.distance_m, review_note: form.review_note })
+  if (props.mode === 'event') emit('submit', { event_type: form.event_type, distance_m: form.distance_m, review_note: form.review_note, version: props.event?.version })
   else emit('submit', { conclusion: form.conclusion, estimated_distance_m: form.estimated_distance_m, uncertainty_m: form.uncertainty_m, version: props.caseItem?.version })
 }
+function formatAt(value?: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 </script>
 
 <template>
   <el-dialog :model-value="modelValue" :title="mode === 'event' ? '事件人工复核' : '定位结论确认'" width="min(560px, calc(100vw - 28px))" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
-    <el-alert v-if="mode === 'event' && event" type="info" :closable="false" show-icon>
-      <template #title>算法原值：{{ eventLabel[event.algorithm_event_type] }} · {{ event.algorithm_distance_m.toFixed(2) }} m</template>
-    </el-alert>
+    <template v-if="mode === 'event' && event">
+      <el-alert type="info" :closable="false" show-icon>
+        <template #title>算法原值：{{ eventLabel[event.algorithm_event_type] }} · {{ event.algorithm_distance_m.toFixed(2) }} m</template>
+      </el-alert>
+      <div v-if="event.reviewed && event.revision_count > 0" class="revision-banner">
+        <History :size="15" />
+        <div>
+          <strong>这是第 {{ event.revision_count + 1 }} 次人工判定</strong>
+          <span v-if="event.last_revision">上一版：{{ eventLabel[event.last_revision.event_type] }} · {{ event.last_revision.distance_m.toFixed(2) }} m · {{ event.last_revision.reviewer_name }} · {{ formatAt(event.last_revision.reviewed_at) }}</span>
+          <span v-else>当前事件已有 {{ event.revision_count }} 次修订记录，旧判定会被保留可追溯。</span>
+        </div>
+      </div>
+    </template>
     <el-alert v-if="mode === 'case'" type="warning" :closable="false" show-icon title="确认后结论将进入不可直接编辑的已确认状态。" />
     <el-form label-position="top" class="review-form">
       <template v-if="mode === 'event'">
@@ -40,5 +52,8 @@ function submit() {
 <style scoped>
 .review-form { margin-top: 20px; }
 .two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.revision-banner { display: flex; gap: 9px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); border-radius: 6px; color: var(--el-color-primary-dark-2); font-size: 12px; }
+.revision-banner div { display: flex; flex-direction: column; gap: 2px; }
+.revision-banner span { color: var(--text-muted); }
 @media (max-width: 520px) { .two-columns { grid-template-columns: 1fr; gap: 0; } }
 </style>

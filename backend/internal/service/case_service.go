@@ -154,7 +154,7 @@ func (s *CaseService) Analyze(id uint, request dto.AnalyzeCaseRequest, actor Act
 	encoded, _ := json.Marshal(differences)
 	params, _ := json.Marshal(dto.CaseParameters{DistanceToleranceM: tolerance, LossIncreaseDB: loss})
 	distance, uncertainty, found := algorithm.PrimaryDifference(differences)
-	updates := map[string]any{"differences_json": datatypes.JSON(encoded), "parameters_json": datatypes.JSON(params), "analysis_error": ""}
+	updates := map[string]any{"differences_json": datatypes.JSON(encoded), "parameters_json": datatypes.JSON(params), "analysis_error": "", "requires_reanalysis": false}
 	if found {
 		updates["estimated_distance_m"] = distance
 		updates["uncertainty_m"] = uncertainty

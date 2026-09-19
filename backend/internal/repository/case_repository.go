@@ -87,3 +87,45 @@ func (r *CaseRepository) RecoverStaleAnalysis(id uint, cutoff time.Time) (bool, 
 	}
 	return result.RowsAffected > 0, nil
 }
+
+// ReferencingTrace returns cases that compare against the given trace either
+// as baseline or as current capture, regardless of status.
+func (r *CaseRepository) ReferencingTrace(traceID uint) ([]model.LocalizationCase, error) {
+	var items []model.LocalizationCase
+	if err := r.db.Where("baseline_trace_id = ? OR current_trace_id = ?", traceID, traceID).Order("id ASC").Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list cases referencing trace: %w", err)
+	}
+	return items, nil
+}
+
+// InvalidateForEventRevision forces every non-closed case referencing the
+// revised trace back to draft and records why its previous analysis is stale.
+// Confirmed but still-open cases are reopened; closed cases are left untouched
+// (the service rejects the revision before this point). The returned items are
+// the affected rows, re-read so their new versions are available for auditing.
+func (r *CaseRepository) InvalidateForEventRevision(traceID uint, reason string) ([]model.LocalizationCase, error) {
+	updates := map[string]any{
+		"case_status":          constants.CaseDraft,
+		"analysis_error":       reason,
+		"requires_reanalysis":  true,
+		"conclusion":           "",
+		"reviewer_id":          nil,
+		"estimated_distance_m": nil,
+		"uncertainty_m":        nil,
+		"version":              gorm.Expr("version + 1"),
+	}
+	result := r.db.Model(&model.LocalizationCase{}).
+		Where("(baseline_trace_id = ? OR current_trace_id = ?) AND case_status <> ?", traceID, traceID, constants.CaseClosed).
+		Updates(updates)
+	if result.Error != nil {
+		return nil, fmt.Errorf("invalidate cases for event revision: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	var items []model.LocalizationCase
+	if err := r.db.Where("(baseline_trace_id = ? OR current_trace_id = ?) AND case_status = ? AND requires_reanalysis = ?", traceID, traceID, constants.CaseDraft, true).Order("id ASC").Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("reload invalidated cases: %w", err)
+	}
+	return items, nil
+}

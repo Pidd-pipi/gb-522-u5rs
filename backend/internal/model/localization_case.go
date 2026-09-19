@@ -19,6 +19,7 @@ type LocalizationCase struct {
 	ReviewerID         *uint                `json:"reviewer_id"`
 	ClosedAt           *time.Time           `json:"closed_at"`
 	AnalysisError      string               `gorm:"size:1000" json:"analysis_error"`
+	RequiresReanalysis bool                 `gorm:"not null;default:false;index" json:"requires_reanalysis"`
 	ParametersJSON     datatypes.JSON       `gorm:"type:jsonb;not null" json:"parameters_json"`
 	DifferencesJSON    datatypes.JSON       `gorm:"type:jsonb" json:"differences_json"`
 	Version            uint                 `gorm:"not null;default:1" json:"version"`

@@ -13,6 +13,7 @@ export interface LocalizationCase {
   reviewer_id?: number
   closed_at?: string
   analysis_error: string
+  requires_reanalysis: boolean
   parameters_json: { distance_tolerance_m: number; loss_increase_db: number }
   differences_json: Difference[]
   version: number

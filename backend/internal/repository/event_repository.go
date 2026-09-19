@@ -11,6 +11,21 @@ import (
 
 type EventRepository struct{ db *gorm.DB }
 
+func (r *EventRepository) CreateRevision(entry *model.EventRevision) error {
+	if err := r.db.Create(entry).Error; err != nil {
+		return fmt.Errorf("create event revision: %w", err)
+	}
+	return nil
+}
+
+func (r *EventRepository) ListRevisions(eventID uint) ([]model.EventRevision, error) {
+	var revisions []model.EventRevision
+	if err := r.db.Where("event_id = ?", eventID).Order("revision_no DESC").Find(&revisions).Error; err != nil {
+		return nil, fmt.Errorf("list event revisions: %w", err)
+	}
+	return revisions, nil
+}
+
 func (r *EventRepository) ReplaceForTrace(traceID uint, events []model.EventMarker) error {
 	if err := r.db.Where("trace_id = ? AND reviewed = ?", traceID, false).Delete(&model.EventMarker{}).Error; err != nil {
 		return fmt.Errorf("clear unreviewed events: %w", err)
@@ -68,13 +83,26 @@ func (r *EventRepository) ForTrace(traceID uint) ([]model.EventMarker, error) {
 	return events, nil
 }
 
-func (r *EventRepository) Review(event *model.EventMarker) error {
-	result := r.db.Model(&model.EventMarker{}).Where("id = ?", event.ID).Updates(map[string]any{"event_type": event.EventType, "distance_m": event.DistanceM, "reviewed": true, "review_note": event.ReviewNote, "reviewed_by": event.ReviewedBy, "reviewed_at": event.ReviewedAt})
+// Review applies a human decision with an optimistic version check. Two
+// concurrent revisions based on the same version cannot both succeed: only
+// the conditional UPDATE that matches the expected version affects a row.
+func (r *EventRepository) Review(event *model.EventMarker) (bool, error) {
+	result := r.db.Model(&model.EventMarker{}).
+		Where("id = ? AND version = ?", event.ID, event.Version).
+		Updates(map[string]any{
+			"event_type":         event.EventType,
+			"distance_m":         event.DistanceM,
+			"reviewed":           true,
+			"review_note":        event.ReviewNote,
+			"reviewed_by":        event.ReviewedBy,
+			"reviewed_at":        event.ReviewedAt,
+			"version":            gorm.Expr("version + 1"),
+			"revision_count":     event.RevisionCount,
+			"last_revision_at":   event.LastRevisionAt,
+			"last_revision_json": event.LastRevisionJSON,
+		})
 	if result.Error != nil {
-		return fmt.Errorf("review event marker: %w", result.Error)
+		return false, fmt.Errorf("review event marker: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return result.RowsAffected == 1, nil
 }

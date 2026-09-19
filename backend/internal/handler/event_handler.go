@@ -61,10 +61,23 @@ func (h *EventHandler) Review(c *gin.Context) {
 	if !bind(c, h.validate, &request) {
 		return
 	}
-	item, err := h.service.Review(id, request, actor(c))
+	result, err := h.service.Review(id, request, actor(c))
 	if err != nil {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusOK, item, nil)
+	ok(c, http.StatusOK, result, nil)
+}
+
+func (h *EventHandler) Revisions(c *gin.Context) {
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	items, err := h.service.Revisions(id)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusOK, items, nil)
 }

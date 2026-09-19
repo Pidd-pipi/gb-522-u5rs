@@ -30,9 +30,9 @@ docker compose down -v --remove-orphans
 
 - 线路档案：校验线路长度和折射率，查看历史轨迹，由 reviewer/admin 设置基线。
 - 轨迹分析：导入离线采样，记录去噪窗口、检测阈值和合并窗口，缩放真实 API 曲线。
-- 事件复核：按线路、类型和复核状态筛选，保留算法原值并单独保存人工修订。
-- 定位案例：执行基线差异比较，按 `draft -> analyzing -> pending_review -> confirmed -> closed` 流转。
-- 不可变审计：记录轨迹导入、基线变更、算法参数、事件修订、案例确认和关闭，携带 request ID 与前后值摘要。
+- 事件复核：按线路、类型和复核状态筛选，保留算法原值并单独保存人工修订；每次修订形成不可变轨迹（旧人工判定、修订人与时间），乐观锁保证并发修订只成功一次。
+- 定位案例：执行基线差异比较，按 `draft -> analyzing -> pending_review -> confirmed -> closed` 流转；引用轨迹上的事件被复核修订时，未关闭案例自动退回草稿、记录失效原因并提示重新分析，已关闭案例则锁定拒绝修订。
+- 不可变审计：记录轨迹导入、基线变更、算法参数、事件修订、事件修订导致的案例失效、案例确认和关闭，携带 request ID 与前后值摘要。
 
 ## 技术栈与目录
 
@@ -83,7 +83,8 @@ frontend/src/pages                 五个业务页与登录页
 | `GET` | `/api/v1/traces/:id` | 轨迹、处理点和事件 |
 | `POST` | `/api/v1/traces/:id/detect` | 执行事件检测 |
 | `GET` | `/api/v1/events` | 事件筛选 |
-| `PATCH` | `/api/v1/events/:id/review` | 人工复核 |
+| `GET` | `/api/v1/events/:id/revisions` | 事件修订轨迹 |
+| `PATCH` | `/api/v1/events/:id/review` | 人工复核（携带 `version`） |
 | `GET/POST` | `/api/v1/cases` | 案例列表/新建 |
 | `GET` | `/api/v1/cases/:id` | 案例与差异 |
 | `POST` | `/api/v1/cases/:id/analyze` | 基线比对 |
@@ -98,7 +99,7 @@ frontend/src/pages                 五个业务页与登录页
 - 数据库与 model：`backend/internal/model/event_marker.go`
 - constants：`backend/internal/constants/event.go`
 - dto/service/handler/router：`backend/internal/dto/event.go`、`service/event_service.go`、`handler/event_handler.go`、`router/event_router.go`
-- 前端 type/api/store/component/page：`frontend/src/types/event.ts`、`api/domain.ts`、`stores/events.ts`、`components/common/EventTypeBadge.vue`、`pages/EventsPage.vue`、`pages/TracesPage.vue`
+- 前端 type/api/store/component/page：`frontend/src/types/event.ts`、`api/domain.ts`、`stores/events.ts`、`components/common/EventTypeBadge.vue`、`components/common/EventRevisionHistory.vue`、`pages/EventsPage.vue`、`pages/TracesPage.vue`
 
 `CaseStatus = draft | analyzing | pending_review | confirmed | closed`：
 
@@ -115,7 +116,7 @@ frontend/src/pages                 五个业务页与登录页
 4. 距离公式：`distance = c * sample_index * sample_interval_ns * 1e-9 / (2 * refractive_index)`，其中 `c = 299792458 m/s`。超过线路长度的候选事件被拒绝。
 5. 基线比对：在距离容差内一对一最近匹配，输出新增、消失和损耗增大三类差异与置信度。
 
-状态迁移使用条件更新和 `version` 乐观锁。分析失败回到 `draft` 并保存错误；只有 reviewer/admin 能确认；关闭后不可修改。登录、轨迹导入和分析使用本地内存限流。访问日志不记录 JWT、密码、请求体或完整采样数组。
+状态迁移使用条件更新和 `version` 乐观锁。分析失败回到 `draft` 并保存错误；只有 reviewer/admin 能确认；关闭后不可修改。事件复核同样基于 `version` 乐观锁：提交旧版本或并发竞败返回 `STATE_CONFLICT`，同一事件的并发修订只有一次落库，每次成功修订都把上一版人工判定（类型、距离、备注、修订人与时间）写入不可变的 `event_revisions` 轨迹。复核事务内还会检查定位案例引用：事件所在轨迹被未关闭案例引用时，案例强制退回 `draft`、清空旧结论并把失效原因写入 `analysis_error`、置位 `requires_reanalysis`，重新分析后自动清除；被已关闭案例引用时整个修订回滚并返回 `STATE_CONFLICT`，事件与修订轨迹均不变。登录、轨迹导入和分析使用本地内存限流。访问日志不记录 JWT、密码、请求体或完整采样数组。
 
 ## 本地开发与验证
 
@@ -139,6 +140,8 @@ npm --prefix frontend run build
 - 轨迹导入被拒绝：确认至少 16 点、无 NaN/Inf，采样范围覆盖线路至少 5%，且不超过 `MAX_TRACE_POINTS`。
 - 案例无法分析：基线和当前轨迹均需先执行事件检测。
 - 确认返回 `STATE_CONFLICT`：刷新案例取得最新 `version`，并确认状态为 `pending_review`。
+- 事件复核返回 `STATE_CONFLICT`：刷新事件页取得最新 `version` 后重试；若提示被已关闭案例锁定，该事件不允许再修订。
+- 案例出现“需重新分析”：其引用轨迹上的事件已被复核修订，案例已退回草稿且原结论失效，按记录的失效原因重新执行基线分析即可清除标记。
 
 ## License
 
