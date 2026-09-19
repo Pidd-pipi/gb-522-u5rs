@@ -87,3 +87,43 @@ func (r *CaseRepository) RecoverStaleAnalysis(id uint, cutoff time.Time) (bool, 
 	}
 	return result.RowsAffected > 0, nil
 }
+
+// HasClosedCaseReferencingTrace reports whether a closed case still depends on
+// events of the trace; closed cases are immutable so they block event revision.
+func (r *CaseRepository) HasClosedCaseReferencingTrace(traceID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.LocalizationCase{}).
+		Where("case_status = ? AND (baseline_trace_id = ? OR current_trace_id = ?)", constants.CaseClosed, traceID, traceID).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("count closed cases referencing trace: %w", err)
+	}
+	return count > 0, nil
+}
+
+// OpenCasesReferencingTrace lists non-closed cases whose comparison inputs
+// include the trace, so an event revision can invalidate their conclusions.
+func (r *CaseRepository) OpenCasesReferencingTrace(traceID uint) ([]model.LocalizationCase, error) {
+	var items []model.LocalizationCase
+	err := r.db.Where("case_status <> ? AND (baseline_trace_id = ? OR current_trace_id = ?)", constants.CaseClosed, traceID, traceID).
+		Order("id ASC").Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("list open cases referencing trace: %w", err)
+	}
+	return items, nil
+}
+
+// Invalidate returns a non-closed case to draft with the reason recorded; the
+// version predicate keeps the reset atomic against concurrent case workflows.
+func (r *CaseRepository) Invalidate(id, version uint, reason string) error {
+	result := r.db.Model(&model.LocalizationCase{}).
+		Where("id = ? AND version = ? AND case_status <> ?", id, version, constants.CaseClosed).
+		Updates(map[string]any{"case_status": constants.CaseDraft, "invalidation_reason": reason, "version": gorm.Expr("version + 1")})
+	if result.Error != nil {
+		return fmt.Errorf("invalidate localization case: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrConflict
+	}
+	return nil
+}

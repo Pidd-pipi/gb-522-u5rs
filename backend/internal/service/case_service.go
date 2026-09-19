@@ -117,7 +117,7 @@ func (s *CaseService) Analyze(id uint, request dto.AnalyzeCaseRequest, actor Act
 		return item, conflict("case must be in draft before analysis", nil)
 	}
 	if err := s.store.Transaction(func(tx *repository.Store) error {
-		if err := tx.Cases.Transition(item.ID, item.Version, constants.CaseDraft, constants.CaseAnalyzing, map[string]any{"analysis_error": ""}); err != nil {
+		if err := tx.Cases.Transition(item.ID, item.Version, constants.CaseDraft, constants.CaseAnalyzing, map[string]any{"analysis_error": "", "invalidation_reason": ""}); err != nil {
 			return err
 		}
 		return tx.Audits.Create(audit(actor, "case.analysis_started", "LocalizationCase", item.ID, &item.RouteID, snapshot(map[string]any{"status": item.CaseStatus}), snapshot(map[string]any{"status": constants.CaseAnalyzing})))

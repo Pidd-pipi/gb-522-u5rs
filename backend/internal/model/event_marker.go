@@ -21,6 +21,27 @@ type EventMarker struct {
 	ReviewNote               string              `gorm:"size:1000" json:"review_note"`
 	ReviewedBy               *uint               `json:"reviewed_by"`
 	ReviewedAt               *time.Time          `json:"reviewed_at"`
+	RevisionCount            uint                `gorm:"not null;default:0" json:"revision_count"`
+	Version                  uint                `gorm:"not null;default:1" json:"version"`
+	LatestRevision           *EventRevision      `gorm:"-" json:"latest_revision,omitempty"`
 	CreatedAt                time.Time           `json:"created_at"`
 	UpdatedAt                time.Time           `json:"updated_at"`
+}
+
+// EventRevision preserves one superseded manual review judgment so that
+// re-reviewing an event never erases the previous decision or its timestamp.
+type EventRevision struct {
+	ID                 uint                `gorm:"primaryKey" json:"id"`
+	EventID            uint                `gorm:"not null;index" json:"event_id"`
+	RevisionNo         uint                `gorm:"not null" json:"revision_no"`
+	PreviousEventType  constants.EventType `gorm:"size:24;not null" json:"previous_event_type"`
+	PreviousDistanceM  float64             `gorm:"not null" json:"previous_distance_m"`
+	PreviousReviewNote string              `gorm:"size:1000" json:"previous_review_note"`
+	PreviousReviewedBy *uint               `json:"previous_reviewed_by"`
+	PreviousReviewedAt *time.Time          `json:"previous_reviewed_at"`
+	NewEventType       constants.EventType `gorm:"size:24;not null" json:"new_event_type"`
+	NewDistanceM       float64             `gorm:"not null" json:"new_distance_m"`
+	NewReviewNote      string              `gorm:"size:1000" json:"new_review_note"`
+	RevisedBy          uint                `gorm:"not null" json:"revised_by"`
+	CreatedAt          time.Time           `gorm:"index" json:"created_at"`
 }

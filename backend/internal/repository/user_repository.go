@@ -17,6 +17,10 @@ import (
 
 var ErrNotFound = errors.New("record not found")
 
+// ErrConflict reports a conditional update that matched no row because the
+// resource version or state changed underneath the caller.
+var ErrConflict = errors.New("resource state changed")
+
 type Store struct {
 	DB     *gorm.DB
 	Users  *UserRepository
@@ -67,7 +71,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 func MigrateAndSeed(db *gorm.DB) error {
-	if err := db.AutoMigrate(&model.User{}, &model.FiberRoute{}, &model.TraceCapture{}, &model.EventMarker{}, &model.LocalizationCase{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.FiberRoute{}, &model.TraceCapture{}, &model.EventMarker{}, &model.EventRevision{}, &model.LocalizationCase{}, &model.AuditLog{}); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
 	accounts := []struct{ username, display, role string }{{"analyst", "分析员", constants.RoleAnalyst}, {"reviewer", "复核员", constants.RoleReviewer}, {"admin", "系统管理员", constants.RoleAdmin}}

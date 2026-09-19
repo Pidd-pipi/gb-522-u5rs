@@ -68,13 +68,54 @@ func (r *EventRepository) ForTrace(traceID uint) ([]model.EventMarker, error) {
 	return events, nil
 }
 
-func (r *EventRepository) Review(event *model.EventMarker) error {
-	result := r.db.Model(&model.EventMarker{}).Where("id = ?", event.ID).Updates(map[string]any{"event_type": event.EventType, "distance_m": event.DistanceM, "reviewed": true, "review_note": event.ReviewNote, "reviewed_by": event.ReviewedBy, "reviewed_at": event.ReviewedAt})
+// Review applies a manual judgment guarded by the event version so that two
+// concurrent reviews of the same event cannot both succeed.
+func (r *EventRepository) Review(event *model.EventMarker, expectedVersion uint) error {
+	result := r.db.Model(&model.EventMarker{}).
+		Where("id = ? AND version = ?", event.ID, expectedVersion).
+		Updates(map[string]any{
+			"event_type": event.EventType, "distance_m": event.DistanceM, "reviewed": true,
+			"review_note": event.ReviewNote, "reviewed_by": event.ReviewedBy, "reviewed_at": event.ReviewedAt,
+			"revision_count": event.RevisionCount, "version": gorm.Expr("version + 1"),
+		})
 	if result.Error != nil {
 		return fmt.Errorf("review event marker: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return ErrNotFound
+		return ErrConflict
 	}
 	return nil
+}
+
+func (r *EventRepository) CreateRevision(revision *model.EventRevision) error {
+	if err := r.db.Create(revision).Error; err != nil {
+		return fmt.Errorf("create event revision: %w", err)
+	}
+	return nil
+}
+
+func (r *EventRepository) ListRevisions(eventID uint) ([]model.EventRevision, error) {
+	var revisions []model.EventRevision
+	if err := r.db.Where("event_id = ?", eventID).Order("revision_no DESC").Find(&revisions).Error; err != nil {
+		return nil, fmt.Errorf("list event revisions: %w", err)
+	}
+	return revisions, nil
+}
+
+// LatestRevisions loads the newest revision per event in one query so lists
+// can show the most recent change without N+1 lookups.
+func (r *EventRepository) LatestRevisions(eventIDs []uint) (map[uint]model.EventRevision, error) {
+	latest := make(map[uint]model.EventRevision, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return latest, nil
+	}
+	sub := r.db.Model(&model.EventRevision{}).Select("event_id, MAX(revision_no) AS revision_no").Where("event_id IN ?", eventIDs).Group("event_id")
+	var revisions []model.EventRevision
+	if err := r.db.Joins("JOIN (?) latest ON latest.event_id = event_revisions.event_id AND latest.revision_no = event_revisions.revision_no", sub).Find(&revisions).Error; err != nil {
+		return nil, fmt.Errorf("list latest event revisions: %w", err)
+	}
+	for _, revision := range revisions {
+		latest[revision.EventID] = revision
+	}
+	return latest, nil
 }

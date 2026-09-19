@@ -9,5 +9,6 @@ import (
 func registerEventRoutes(api *gin.RouterGroup, deps Dependencies) {
 	events := api.Group("/events")
 	events.GET("", deps.EventHandler.List)
+	events.GET("/:id/revisions", deps.EventHandler.Revisions)
 	events.PATCH("/:id/review", appmw.RBACMiddleware(constants.RoleReviewer, constants.RoleAdmin), deps.EventHandler.Review)
 }

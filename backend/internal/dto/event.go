@@ -6,6 +6,7 @@ type ReviewEventRequest struct {
 	EventType  constants.EventType `json:"event_type" validate:"required"`
 	DistanceM  *float64            `json:"distance_m" validate:"omitempty,gte=0"`
 	ReviewNote string              `json:"review_note" validate:"required,min=3,max=1000"`
+	Version    uint                `json:"version" validate:"required,gt=0"`
 }
 
 type EventQuery struct {

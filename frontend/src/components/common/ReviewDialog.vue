@@ -11,7 +11,7 @@ watch(() => [props.modelValue, props.event, props.caseItem], () => {
   if (props.caseItem) { form.conclusion = props.caseItem.conclusion ?? ''; form.estimated_distance_m = props.caseItem.estimated_distance_m ?? 0; form.uncertainty_m = props.caseItem.uncertainty_m ?? 10 }
 }, { immediate: true })
 function submit() {
-  if (props.mode === 'event') emit('submit', { event_type: form.event_type, distance_m: form.distance_m, review_note: form.review_note })
+  if (props.mode === 'event') emit('submit', { event_type: form.event_type, distance_m: form.distance_m, review_note: form.review_note, version: props.event?.version })
   else emit('submit', { conclusion: form.conclusion, estimated_distance_m: form.estimated_distance_m, uncertainty_m: form.uncertainty_m, version: props.caseItem?.version })
 }
 </script>
@@ -21,6 +21,7 @@ function submit() {
     <el-alert v-if="mode === 'event' && event" type="info" :closable="false" show-icon>
       <template #title>算法原值：{{ eventLabel[event.algorithm_event_type] }} · {{ event.algorithm_distance_m.toFixed(2) }} m</template>
     </el-alert>
+    <el-alert v-if="mode === 'event' && event?.reviewed" type="warning" :closable="false" show-icon title="该事件已复核，提交后当前人工判定与修订时间将归档为修订记录。" />
     <el-alert v-if="mode === 'case'" type="warning" :closable="false" show-icon title="确认后结论将进入不可直接编辑的已确认状态。" />
     <el-form label-position="top" class="review-form">
       <template v-if="mode === 'event'">

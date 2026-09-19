@@ -30,8 +30,8 @@ docker compose down -v --remove-orphans
 
 - 线路档案：校验线路长度和折射率，查看历史轨迹，由 reviewer/admin 设置基线。
 - 轨迹分析：导入离线采样，记录去噪窗口、检测阈值和合并窗口，缩放真实 API 曲线。
-- 事件复核：按线路、类型和复核状态筛选，保留算法原值并单独保存人工修订。
-- 定位案例：执行基线差异比较，按 `draft -> analyzing -> pending_review -> confirmed -> closed` 流转。
+- 事件复核：按线路、类型和复核状态筛选，保留算法原值并单独保存人工修订；重复复核先把旧判定与修订时间归档为修订记录，再写入新判定，事件页展示修订次数与最近变化。
+- 定位案例：执行基线差异比较，按 `draft -> analyzing -> pending_review -> confirmed -> closed` 流转；被修订事件引用的未关闭案例自动回到草稿并记录失效原因，提示需重新分析，已关闭案例则拒绝修订。
 - 不可变审计：记录轨迹导入、基线变更、算法参数、事件修订、案例确认和关闭，携带 request ID 与前后值摘要。
 
 ## 技术栈与目录
@@ -83,7 +83,8 @@ frontend/src/pages                 五个业务页与登录页
 | `GET` | `/api/v1/traces/:id` | 轨迹、处理点和事件 |
 | `POST` | `/api/v1/traces/:id/detect` | 执行事件检测 |
 | `GET` | `/api/v1/events` | 事件筛选 |
-| `PATCH` | `/api/v1/events/:id/review` | 人工复核 |
+| `PATCH` | `/api/v1/events/:id/review` | 人工复核（携带 `version` 乐观锁） |
+| `GET` | `/api/v1/events/:id/revisions` | 事件修订历史 |
 | `GET/POST` | `/api/v1/cases` | 案例列表/新建 |
 | `GET` | `/api/v1/cases/:id` | 案例与差异 |
 | `POST` | `/api/v1/cases/:id/analyze` | 基线比对 |
@@ -95,7 +96,7 @@ frontend/src/pages                 五个业务页与登录页
 
 `EventType = connector | splice | bend | break | end | unknown`：
 
-- 数据库与 model：`backend/internal/model/event_marker.go`
+- 数据库与 model：`backend/internal/model/event_marker.go`（含 `EventRevision` 修订归档）
 - constants：`backend/internal/constants/event.go`
 - dto/service/handler/router：`backend/internal/dto/event.go`、`service/event_service.go`、`handler/event_handler.go`、`router/event_router.go`
 - 前端 type/api/store/component/page：`frontend/src/types/event.ts`、`api/domain.ts`、`stores/events.ts`、`components/common/EventTypeBadge.vue`、`pages/EventsPage.vue`、`pages/TracesPage.vue`
@@ -115,7 +116,7 @@ frontend/src/pages                 五个业务页与登录页
 4. 距离公式：`distance = c * sample_index * sample_interval_ns * 1e-9 / (2 * refractive_index)`，其中 `c = 299792458 m/s`。超过线路长度的候选事件被拒绝。
 5. 基线比对：在距离容差内一对一最近匹配，输出新增、消失和损耗增大三类差异与置信度。
 
-状态迁移使用条件更新和 `version` 乐观锁。分析失败回到 `draft` 并保存错误；只有 reviewer/admin 能确认；关闭后不可修改。登录、轨迹导入和分析使用本地内存限流。访问日志不记录 JWT、密码、请求体或完整采样数组。
+状态迁移使用条件更新和 `version` 乐观锁。事件复核同样按 `version` 条件更新，同一事件的并发修订只有携带当前版本的一次能成功；重复复核在同一事务内先把旧人工判定与修订时间写入 `event_revisions`，再更新事件，并把引用该轨迹的未关闭案例重置为 `draft` 且记录失效原因（已关闭案例引用时返回 `STATE_CONFLICT` 拒绝修订）。分析失败回到 `draft` 并保存错误；只有 reviewer/admin 能确认；关闭后不可修改。登录、轨迹导入和分析使用本地内存限流。访问日志不记录 JWT、密码、请求体或完整采样数组。
 
 ## 本地开发与验证
 

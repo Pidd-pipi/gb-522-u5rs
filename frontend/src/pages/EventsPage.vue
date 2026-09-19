@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Filter, Radar } from 'lucide-vue-next'
+import { Filter, History, Radar } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EventTypeBadge from '@/components/common/EventTypeBadge.vue'
 import ReviewDialog from '@/components/common/ReviewDialog.vue'
@@ -10,16 +10,18 @@ import { useRouteStore } from '@/stores/routes'
 import { useAuth } from '@/hooks/useAuth'
 import { EVENT_TYPES, eventLabel, type EventMarker, type EventType } from '@/types/event'
 
-const events = useEventStore(); const routes = useRouteStore(); const auth = useAuth(); const dialog = ref(false); const current = ref<EventMarker | null>(null); const busy = ref(false)
+const events = useEventStore(); const routes = useRouteStore(); const auth = useAuth(); const dialog = ref(false); const current = ref<EventMarker | null>(null); const busy = ref(false); const historyOpen = ref(false)
 const filters = reactive<{ route_id?: number; event_type?: EventType; reviewed?: boolean }>({})
 async function search() { await events.fetch({ ...filters, page_size: 100 }) }
 function openReview(item: EventMarker) { current.value = item; dialog.value = true }
-async function review(value: Record<string, unknown>) { if (!current.value) return; busy.value = true; try { await events.review(current.value.id, value as {event_type:EventType;distance_m?:number;review_note:string}); dialog.value = false; ElMessage.success('事件复核结果已保存') } finally { busy.value = false } }
+async function review(value: Record<string, unknown>) { if (!current.value) return; busy.value = true; try { await events.review(current.value.id, value as {event_type:EventType;distance_m?:number;review_note:string;version:number}); dialog.value = false; ElMessage.success('事件复核结果已保存') } catch { await search() } finally { busy.value = false } }
+async function openHistory(item: EventMarker) { current.value = item; historyOpen.value = true; await events.fetchRevisions(item.id) }
+function formatTime(value?: string) { return value ? new Date(value).toLocaleString() : '—' }
 onMounted(async () => { await Promise.all([routes.fetch({page_size:100}), search()]) })
 </script>
 
 <template>
-  <PageHeader title="事件复核" eyebrow="EVENT REVIEW" description="对照算法原值修订事件类型、距离和备注。" />
+  <PageHeader title="事件复核" eyebrow="EVENT REVIEW" description="对照算法原值修订事件类型、距离和备注，每次修订归档旧判定。" />
   <section class="content-band">
     <div class="filter-band"><div class="filter-label"><Filter :size="16" /><span>筛选条件</span></div><el-select v-model="filters.route_id" clearable placeholder="全部线路" @change="search"><el-option v-for="route in routes.items" :key="route.id" :label="route.route_code" :value="route.id" /></el-select><el-select v-model="filters.event_type" clearable placeholder="全部类型" @change="search"><el-option v-for="type in EVENT_TYPES" :key="type" :label="eventLabel[type]" :value="type" /></el-select><el-select v-model="filters.reviewed" clearable placeholder="全部状态" @change="search"><el-option label="未复核" :value="false" /><el-option label="已复核" :value="true" /></el-select><span class="toolbar-spacer subtle-count">{{ events.total }} 项事件</span></div>
     <div class="data-surface">
@@ -31,14 +33,27 @@ onMounted(async () => { await Promise.all([routes.fetch({page_size:100}), search
         <el-table-column prop="insertion_loss_db" label="损耗 dB" width="100" />
         <el-table-column label="置信度" width="120"><template #default="scope">{{ Math.round(scope.row.confidence*100) }}%</template></el-table-column>
         <el-table-column label="复核记录" min-width="190"><template #default="scope"><span v-if="scope.row.reviewed" class="review-note">{{ scope.row.review_note }}</span><span v-else class="unreviewed">待人工复核</span></template></el-table-column>
+        <el-table-column label="修订闭环" min-width="210"><template #default="scope"><div v-if="scope.row.revision_count > 0" class="revision-cell"><span class="revision-head"><el-tag size="small" type="warning" effect="light">修订 {{ scope.row.revision_count }} 次</el-tag><el-button link type="primary" size="small" @click="openHistory(scope.row)"><History :size="13" />历史</el-button></span><span v-if="scope.row.latest_revision" class="latest-change">最近：{{ eventLabel[scope.row.latest_revision.previous_event_type as EventType] }} → {{ eventLabel[scope.row.latest_revision.new_event_type as EventType] }} · {{ scope.row.latest_revision.previous_distance_m.toFixed(2) }} → {{ scope.row.latest_revision.new_distance_m.toFixed(2) }} m</span></div><span v-else class="muted">无修订</span></template></el-table-column>
         <el-table-column width="94" fixed="right"><template #default="scope"><el-button v-if="auth.canReview()" link type="primary" @click="openReview(scope.row)">{{ scope.row.reviewed ? '重新复核' : '复核' }}</el-button><span v-else class="muted">只读</span></template></el-table-column>
         <template #empty><div class="empty-state"><div><Radar :size="34" /><strong>没有匹配事件</strong><span>请先在轨迹分析页执行检测。</span></div></div></template>
       </el-table>
     </div>
   </section>
   <ReviewDialog v-model="dialog" mode="event" :event="current" :loading="busy" @submit="review" />
+  <el-dialog v-model="historyOpen" :title="`事件 #${current?.id ?? ''} 修订历史`" width="min(640px, calc(100vw - 28px))">
+    <div v-loading="events.revisionsLoading" class="history-body">
+      <el-timeline v-if="events.revisions.length">
+        <el-timeline-item v-for="revision in events.revisions" :key="revision.id" :timestamp="formatTime(revision.created_at)" placement="top">
+          <strong>修订 #{{ revision.revision_no }}</strong>：{{ eventLabel[revision.previous_event_type as EventType] }} · {{ revision.previous_distance_m.toFixed(2) }} m → {{ eventLabel[revision.new_event_type as EventType] }} · {{ revision.new_distance_m.toFixed(2) }} m
+          <div class="history-note">旧判定（{{ formatTime(revision.previous_reviewed_at) }}）：{{ revision.previous_review_note || '无备注' }}</div>
+          <div class="history-note">新判定：{{ revision.new_review_note }}</div>
+        </el-timeline-item>
+      </el-timeline>
+      <el-empty v-else description="尚无修订记录" :image-size="60" />
+    </div>
+  </el-dialog>
 </template>
 
 <style scoped>
-.filter-band{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--line);background:var(--surface)}.filter-band .el-select{width:160px}.filter-label{display:flex;align-items:center;gap:7px;margin-right:5px;color:var(--text-muted);font-size:12px;font-weight:800}.algorithm-value{color:var(--text-muted);font-size:12px}.review-note{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}.unreviewed{color:var(--warning);font-size:12px;font-weight:700}.muted{color:var(--text-muted);font-size:12px}@media(max-width:620px){.filter-band .el-select{width:calc(50% - 5px)}.filter-label{width:100%}}
+.filter-band{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:14px;padding:11px;border:1px solid var(--line);background:var(--surface)}.filter-band .el-select{width:160px}.filter-label{display:flex;align-items:center;gap:7px;margin-right:5px;color:var(--text-muted);font-size:12px;font-weight:800}.algorithm-value{color:var(--text-muted);font-size:12px}.review-note{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}.unreviewed{color:var(--warning);font-size:12px;font-weight:700}.muted{color:var(--text-muted);font-size:12px}.revision-cell{display:flex;flex-direction:column;gap:4px}.revision-head{display:flex;align-items:center;gap:8px}.latest-change{color:var(--text-muted);font-size:12px}.history-body{min-height:120px}.history-note{color:var(--text-muted);font-size:12px;margin-top:4px}@media(max-width:620px){.filter-band .el-select{width:calc(50% - 5px)}.filter-label{width:100%}}
 </style>
